@@ -93,7 +93,7 @@ def get_bot_keyboard():
 def get_channel_keyboard(track: dict):
     """Клавиатура для основного канала"""
     # Формируем ссылку на канал с треками
-    channel_link = f"https://t.me/c/{str(CONFIG['DOWNLOAD_CHANNEL_ID'])[4:]}/"
+    channel_link = "https://t.me/text_pesni_aqw"
     if bot_state.download_message_id:
         channel_link += str(bot_state.download_message_id)
     
