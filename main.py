@@ -104,7 +104,7 @@ def get_channel_keyboard(track: dict):
         ],
         [
             InlineKeyboardButton("📝 Текст песни", url=track["genius_link"]),
-            InlineKeyboardButton("⬇️ Скачать трек", url= https://t.me/text_pesni_aqw)
+            InlineKeyboardButton("⬇️ Скачать трек", url= "https://t.me/text_pesni_aqw")
         ]
     ])
 
