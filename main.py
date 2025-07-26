@@ -4,7 +4,7 @@ import os
 import tempfile
 from urllib.parse import quote
 from datetime import datetime
-
+import pytz
 import aiohttp
 import lyricsgenius
 import requests
@@ -40,9 +40,12 @@ CONFIG = {
     "TELEGRAM_BOT_TOKEN": os.getenv("TELEGRAM_BOT_TOKEN"),
     "YANDEX_TOKEN": os.getenv("YANDEX_TOKEN"),
     "CHANNEL_ID": os.getenv("CHANNEL_ID"),
-    "DOWNLOAD_CHANNEL_ID": int(os.getenv("DOWNLOAD_CHANNEL_ID")),
+    "DOWNLOAD_CHANNEL_ID": int(os.getenv("DOWNLOAD_CHANNEL_ID")),  # ID канала с треками
     "GENIUS_TOKEN": os.getenv("GENIUS_TOKEN"),
 }
+
+# Московский часовой пояс
+MOSCOW_TZ = pytz.timezone('Europe/Moscow')
 
 class BotState:
     def __init__(self):
@@ -71,6 +74,10 @@ class BotState:
 
 bot_state = BotState()
 
+def get_moscow_time():
+    """Возвращает текущее время по Москве в формате HH:MM"""
+    return datetime.now(MOSCOW_TZ).strftime("%H:%M")
+
 def get_bot_keyboard():
     """Клавиатура для управления ботом"""
     return InlineKeyboardMarkup([
@@ -85,6 +92,11 @@ def get_bot_keyboard():
 
 def get_channel_keyboard(track: dict):
     """Клавиатура для основного канала"""
+    # Формируем ссылку на канал с треками
+    channel_link = f"https://t.me/c/{str(CONFIG['DOWNLOAD_CHANNEL_ID'])[4:]}/"
+    if bot_state.download_message_id:
+        channel_link += str(bot_state.download_message_id)
+    
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🎵 Я.Музыка", url=track["yandex_link"]),
@@ -92,8 +104,7 @@ def get_channel_keyboard(track: dict):
         ],
         [
             InlineKeyboardButton("📝 Текст песни", url=track["genius_link"]),
-            InlineKeyboardButton("⬇️ Скачать трек", 
-                url=f"https://t.me/c/{str(CONFIG['DOWNLOAD_CHANNEL_ID'])[4:]}/{bot_state.download_message_id}")
+            InlineKeyboardButton("⬇️ Скачать трек", url=channel_link)
         ]
     ])
 
@@ -143,14 +154,11 @@ def get_current_track():
         )
         title = track.get("title", "")
         
-        # Добавляем текущее время
-        current_time = datetime.now().strftime("%H:%M")
-        
         return {
             "id": track_id,
             "title": title,
             "artists": artists,
-            "time": current_time,
+            "time": get_moscow_time(),
             "yandex_link": f"https://music.yandex.ru/track/{track_id}",
             "multi_link": generate_multi_service_link(track_id),
             "img": track.get("img"),
@@ -347,6 +355,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_state.bot_status_message_id = msg.message_id
 
 def main():
+    # Проверяем наличие pytz
+    try:
+        import pytz
+    except ImportError:
+        logger.error("Требуется установить pytz: pip install pytz")
+        return
+
     required_vars = ["TELEGRAM_BOT_TOKEN", "YANDEX_TOKEN", "CHANNEL_ID", "DOWNLOAD_CHANNEL_ID"]
     if missing := [var for var in required_vars if not CONFIG.get(var)]:
         logger.error(f"Отсутствуют переменные: {', '.join(missing)}")
