@@ -75,8 +75,7 @@ def get_genius_song_url(title: str, artist: str) -> str:
         return f"https://genius.com/search?q={quote(f'{clean_artist} {clean_title}')}"
     except Exception as e:
         logger.error(f"Ошибка поиска на Genius: {e}")
-        return f"https://genius.com/search?q={quote(f'{artist} {title}')}
-"
+        return f"https://genius.com/search?q={quote(f'{artist} {title}')}"
 def get_current_track():
     try:
         headers = {
