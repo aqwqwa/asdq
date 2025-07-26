@@ -3,6 +3,7 @@ import logging
 import os
 import tempfile
 from urllib.parse import quote
+from datetime import datetime
 
 import aiohttp
 import lyricsgenius
@@ -141,11 +142,15 @@ def get_current_track():
             else track.get("artist", "")
         )
         title = track.get("title", "")
-
+        
+        # Добавляем текущее время
+        current_time = datetime.now().strftime("%H:%M")
+        
         return {
             "id": track_id,
             "title": title,
             "artists": artists,
+            "time": current_time,
             "yandex_link": f"https://music.yandex.ru/track/{track_id}",
             "multi_link": generate_multi_service_link(track_id),
             "img": track.get("img"),
@@ -158,10 +163,11 @@ def get_current_track():
 
 async def send_new_track_message(bot: Bot, track: dict) -> int:
     try:
+        caption = f"{track['time']} - {track['title']} — {track['artists']}"
         msg = await bot.send_photo(
             chat_id=CONFIG["CHANNEL_ID"],
             photo=track["img"],
-            caption=f"{track['title']} — {track['artists']}",
+            caption=caption,
             reply_markup=get_channel_keyboard(track)
         )
         return msg.message_id
@@ -171,12 +177,13 @@ async def send_new_track_message(bot: Bot, track: dict) -> int:
 
 async def edit_track_message(bot: Bot, track: dict, msg_id: int) -> bool:
     try:
+        caption = f"{track['time']} - {track['title']} — {track['artists']}"
         await bot.edit_message_media(
             chat_id=CONFIG["CHANNEL_ID"],
             message_id=msg_id,
             media=InputMediaPhoto(
                 media=track["img"],
-                caption=f"{track['title']} — {track['artists']}",
+                caption=caption,
             ),
             reply_markup=get_channel_keyboard(track)
         )
@@ -186,7 +193,6 @@ async def edit_track_message(bot: Bot, track: dict, msg_id: int) -> bool:
         return False
 
 async def send_new_download_message(bot: Bot, track: dict) -> int:
-    """Отправка нового трека в канал загрузок"""
     if not track.get("download_url"):
         return None
 
@@ -214,7 +220,6 @@ async def send_new_download_message(bot: Bot, track: dict) -> int:
         return None
 
 async def update_download_message(bot: Bot, track: dict, msg_id: int) -> bool:
-    """Обновление трека в канале загрузок"""
     if not track.get("download_url"):
         return False
 
@@ -248,26 +253,22 @@ async def track_checker(bot: Bot):
     while bot_state.bot_active:
         track = get_current_track()
         if track:
-            # Обновление в основном канале
             if bot_state.channel_message_id and track["id"] != bot_state.last_track_id:
-                # Обновляем MP3 в канале с треками
                 if bot_state.download_message_id:
                     success = await update_download_message(bot, track, bot_state.download_message_id)
-                    if not success:  # Если не удалось редактировать
-                        await bot.delete_message(CONFIG["DOWNLOAD_CHANNEL_ID"], bot_state.download_message_id)
+                    if not success:
+                        await delete_message(bot, CONFIG["DOWNLOAD_CHANNEL_ID"], bot_state.download_message_id)
                         bot_state.download_message_id = await send_new_download_message(bot, track)
                 else:
                     bot_state.download_message_id = await send_new_download_message(bot, track)
                 
-                # Обновляем пост в основном канале
                 if not await edit_track_message(bot, track, bot_state.channel_message_id):
-                    await bot.delete_message(CONFIG["CHANNEL_ID"], bot_state.channel_message_id)
+                    await delete_message(bot, CONFIG["CHANNEL_ID"], bot_state.channel_message_id)
                     bot_state.channel_message_id = await send_new_track_message(bot, track)
                 
                 bot_state.last_track_id = track["id"]
                 
             elif not bot_state.channel_message_id:
-                # Первый запуск
                 bot_state.download_message_id = await send_new_download_message(bot, track)
                 bot_state.channel_message_id = await send_new_track_message(bot, track)
                 bot_state.last_track_id = track["id"]
@@ -346,16 +347,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_state.bot_status_message_id = msg.message_id
 
 def main():
-    # Проверка конфигурации
     required_vars = ["TELEGRAM_BOT_TOKEN", "YANDEX_TOKEN", "CHANNEL_ID", "DOWNLOAD_CHANNEL_ID"]
     if missing := [var for var in required_vars if not CONFIG.get(var)]:
         logger.error(f"Отсутствуют переменные: {', '.join(missing)}")
         return
 
-    # Инициализация бота
     app = Application.builder().token(CONFIG["TELEGRAM_BOT_TOKEN"]).build()
     
-    # Регистрация обработчиков
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(button_handler))
 
