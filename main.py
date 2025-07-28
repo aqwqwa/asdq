@@ -5,7 +5,39 @@ import aiohttp
 from dotenv import load_dotenv
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, ContextTypes
-from MeeowPlugins_MSharePlugIn import get_track_info, get_current_track_id
+
+# Встроенная логика плагина (MeeowPlugins_MSharePlugIn)
+# === Вместо отдельного файла ===
+
+YANDEX_NOW_PLAYING_URL = "https://api.music.yandex.net/landing3"
+YANDEX_TRACK_INFO_URL = "https://api.music.yandex.net/tracks/{track_id}"
+
+async def get_current_track_id(yandex_token):
+    headers = {"Authorization": f"OAuth {yandex_token}"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(YANDEX_NOW_PLAYING_URL, headers=headers) as resp:
+            data = await resp.json()
+            try:
+                return data['result']['entities'][0]['id']
+            except Exception:
+                return None
+
+async def get_track_info(yandex_token, track_id):
+    headers = {"Authorization": f"OAuth {yandex_token}"}
+    url = YANDEX_TRACK_INFO_URL.format(track_id=track_id)
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            data = await resp.json()
+            track = data['result'][0]
+            artists = ', '.join(artist['name'] for artist in track['artists'])
+            return {
+                "title": track['title'],
+                "artists": artists,
+                "coverUri": track['coverUri']
+            }
+
+# === Конец встроенной логики MeeowPlugins ===
+
 from utils import get_cover_url, get_genius_link, get_download_link
 
 load_dotenv()
@@ -96,7 +128,6 @@ async def track_checker(bot: Bot):
                     await delete_message(bot, CONFIG["CHANNEL_ID"], bot_state.channel_message_id)
                     bot_state.channel_message_id = await send_new_track_message(bot, track)
 
-                # Изменить название канала
                 try:
                     new_title = f"{track['artists']} — {track['title']}"
                     await bot.set_chat_title(chat_id=CONFIG["CHANNEL_ID"], title=new_title)
@@ -114,7 +145,6 @@ def main():
     application.job_queue.run_once(lambda ctx: asyncio.create_task(track_checker(bot)), 0)
     application.run_polling()
 
-# Flask-заглушка для Render
 from flask import Flask
 import threading
 
