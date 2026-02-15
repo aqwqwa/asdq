@@ -23,7 +23,9 @@ from telegram.ext import (
 )
 from telegram.error import BadRequest, TelegramError
 
+# ===========================
 # Логирование
+# ===========================
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -41,7 +43,9 @@ CONFIG = {
 
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 
-
+# ===========================
+# Состояние бота
+# ===========================
 class BotState:
     def __init__(self):
         self.last_track_id = None
@@ -50,15 +54,18 @@ class BotState:
         self.bot_active = False
         self.bot_status_message_id = None
 
+        # Настройки отображения в канале
         self.channel_post_settings = {
-            "poster": True,
-            "buttons": True
+            "poster": True,    # показывать постер
+            "buttons": True    # показывать кнопки
         }
 
 
 bot_state = BotState()
 
-
+# ===========================
+# Вспомогательные функции
+# ===========================
 def get_moscow_time():
     return datetime.now(MOSCOW_TZ).strftime("%H:%M")
 
@@ -89,12 +96,13 @@ def get_bot_keyboard():
 def get_channel_keyboard(track: dict):
     if not bot_state.channel_post_settings["buttons"]:
         return None
-
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("⬇️ Скачать трек", url="https://t.me/text_pesni_aqw")
-        ]
+        [InlineKeyboardButton("⬇️ Скачать трек", url="https://t.me/text_pesni_aqw")]
     ])
+
+
+def generate_caption(track: dict):
+   return f"{track['time']} - <a href='{track['multi_link']}'>{track['title']}</a> — <a href='{track['multi_link']}'>{track['artists']}</a>"
 
 
 def get_current_track():
@@ -127,7 +135,6 @@ def get_current_track():
             "title": title,
             "artists": artists,
             "time": get_moscow_time(),
-            "yandex_link": f"https://music.yandex.ru/track/{track_id}",
             "multi_link": generate_multi_service_link(track_id),
             "img": track.get("img"),
             "download_url": track.get("download_link"),
@@ -137,15 +144,33 @@ def get_current_track():
         logger.error(f"Ошибка получения трека: {e}")
         return None
 
+# ===========================
+# Отправка/редактирование поста
+# ===========================
+async def send_or_edit_track_message(bot: Bot, track: dict):
+    caption = generate_caption(track)
+    msg_id = bot_state.channel_message_id
 
-async def send_new_track_message(bot: Bot, track: dict) -> int:
-    caption = (
-        f"{track['time']} - "
-        f"<a href='{track['multi_link']}'>{track['title']}</a> — {track['artists']}"
-    )
-
-    try:
-        if bot_state.channel_post_settings["poster"] and track.get("img"):
+    # Сценарий 1: постер + кнопки
+    if bot_state.channel_post_settings["poster"] and bot_state.channel_post_settings["buttons"]:
+        if msg_id:
+            try:
+                await bot.edit_message_media(
+                    chat_id=CONFIG["CHANNEL_ID"],
+                    message_id=msg_id,
+                    media=InputMediaPhoto(media=track["img"], caption=caption, parse_mode="HTML"),
+                    reply_markup=get_channel_keyboard(track)
+                )
+            except:
+                msg = await bot.send_photo(
+                    chat_id=CONFIG["CHANNEL_ID"],
+                    photo=track["img"],
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=get_channel_keyboard(track)
+                )
+                bot_state.channel_message_id = msg.message_id
+        else:
             msg = await bot.send_photo(
                 chat_id=CONFIG["CHANNEL_ID"],
                 photo=track["img"],
@@ -153,6 +178,54 @@ async def send_new_track_message(bot: Bot, track: dict) -> int:
                 parse_mode="HTML",
                 reply_markup=get_channel_keyboard(track)
             )
+            bot_state.channel_message_id = msg.message_id
+
+    # Сценарий 2: постер + название
+    elif bot_state.channel_post_settings["poster"]:
+        if msg_id:
+            try:
+                await bot.edit_message_media(
+                    chat_id=CONFIG["CHANNEL_ID"],
+                    message_id=msg_id,
+                    media=InputMediaPhoto(media=track["img"], caption=caption, parse_mode="HTML"),
+                    reply_markup=None
+                )
+            except:
+                msg = await bot.send_photo(
+                    chat_id=CONFIG["CHANNEL_ID"],
+                    photo=track["img"],
+                    caption=caption,
+                    parse_mode="HTML"
+                )
+                bot_state.channel_message_id = msg.message_id
+        else:
+            msg = await bot.send_photo(
+                chat_id=CONFIG["CHANNEL_ID"],
+                photo=track["img"],
+                caption=caption,
+                parse_mode="HTML"
+            )
+            bot_state.channel_message_id = msg.message_id
+
+    # Сценарий 3: кнопки + название
+    elif bot_state.channel_post_settings["buttons"]:
+        if msg_id:
+            try:
+                await bot.edit_message_text(
+                    chat_id=CONFIG["CHANNEL_ID"],
+                    message_id=msg_id,
+                    text=caption,
+                    parse_mode="HTML",
+                    reply_markup=get_channel_keyboard(track)
+                )
+            except:
+                msg = await bot.send_message(
+                    chat_id=CONFIG["CHANNEL_ID"],
+                    text=caption,
+                    parse_mode="HTML",
+                    reply_markup=get_channel_keyboard(track)
+                )
+                bot_state.channel_message_id = msg.message_id
         else:
             msg = await bot.send_message(
                 chat_id=CONFIG["CHANNEL_ID"],
@@ -160,46 +233,11 @@ async def send_new_track_message(bot: Bot, track: dict) -> int:
                 parse_mode="HTML",
                 reply_markup=get_channel_keyboard(track)
             )
-        return msg.message_id
+            bot_state.channel_message_id = msg.message_id
 
-    except Exception as e:
-        logger.error(f"Ошибка отправки: {e}")
-        return None
-
-
-async def edit_track_message(bot: Bot, track: dict, msg_id: int) -> bool:
-    caption = (
-        f"{track['time']} - "
-        f"<a href='{track['multi_link']}'>{track['title']}</a> — {track['artists']}"
-    )
-
-    try:
-        if bot_state.channel_post_settings["poster"] and track.get("img"):
-            await bot.edit_message_media(
-                chat_id=CONFIG["CHANNEL_ID"],
-                message_id=msg_id,
-                media=InputMediaPhoto(
-                    media=track["img"],
-                    caption=caption,
-                    parse_mode="HTML"
-                ),
-                reply_markup=get_channel_keyboard(track)
-            )
-        else:
-            await bot.edit_message_text(
-                chat_id=CONFIG["CHANNEL_ID"],
-                message_id=msg_id,
-                text=caption,
-                parse_mode="HTML",
-                reply_markup=get_channel_keyboard(track)
-            )
-        return True
-
-    except Exception as e:
-        logger.error(f"Ошибка обновления: {e}")
-        return False
-
-
+# ===========================
+# Отправка mp3 в отдельный канал
+# ===========================
 async def send_new_download_message(bot: Bot, track: dict) -> int:
     if not track.get("download_url"):
         return None
@@ -229,18 +267,21 @@ async def send_new_download_message(bot: Bot, track: dict) -> int:
         logger.error(f"Ошибка отправки mp3: {e}")
         return None
 
-
+# ===========================
+# Основной цикл трекера
+# ===========================
 async def track_checker(bot: Bot):
     while bot_state.bot_active:
         track = get_current_track()
         if track and track["id"] != bot_state.last_track_id:
-            bot_state.channel_message_id = await send_new_track_message(bot, track)
-            bot_state.download_message_id = await send_new_download_message(bot, track)
+            await send_or_edit_track_message(bot, track)
             bot_state.last_track_id = track["id"]
-
+            bot_state.download_message_id = await send_new_download_message(bot, track)
         await asyncio.sleep(5)
 
-
+# ===========================
+# Обработка inline кнопок
+# ===========================
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -269,7 +310,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_state.channel_post_settings["buttons"] = not bot_state.channel_post_settings["buttons"]
         await update_status_message(bot, chat_id, "Настройки обновлены")
 
-
+# ===========================
+# Обновление сообщения со статусом бота
+# ===========================
 async def update_status_message(bot: Bot, chat_id: int, text: str):
     if bot_state.bot_status_message_id:
         await bot.edit_message_text(
@@ -286,7 +329,9 @@ async def update_status_message(bot: Bot, chat_id: int, text: str):
         )
         bot_state.bot_status_message_id = msg.message_id
 
-
+# ===========================
+# Команда /start
+# ===========================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text(
         "🎵 Музыкальный трекер\nУправление:",
@@ -294,13 +339,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     bot_state.bot_status_message_id = msg.message_id
 
-
+# ===========================
+# Запуск бота
+# ===========================
 def main():
     app = Application.builder().token(CONFIG["TELEGRAM_BOT_TOKEN"]).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
