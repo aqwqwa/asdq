@@ -25,6 +25,8 @@ from telegram.ext import (
 )
 from telegram.error import BadRequest, TelegramError
 from unidecode import unidecode
+from flask import Flask
+import threading
 
 # Настройка логирования
 logging.basicConfig(
@@ -46,6 +48,7 @@ CONFIG = {
 
 # Московский часовой пояс
 MOSCOW_TZ = pytz.timezone('Europe/Moscow')
+
 
 class BotState:
     def __init__(self):
@@ -72,11 +75,13 @@ class BotState:
                 logger.error(f"Ошибка инициализации Genius: {e}")
         return None
 
+
 bot_state = BotState()
 
+
 def get_moscow_time():
-    """Возвращает текущее время по Москве в формате HH:MM"""
     return datetime.now(MOSCOW_TZ).strftime("%H:%M")
+
 
 def get_bot_keyboard():
     """Клавиатура для управления ботом"""
@@ -90,31 +95,14 @@ def get_bot_keyboard():
         ]
     ])
 
-def get_channel_keyboard(track: dict):
-    """Клавиатура для основного канала"""
-    # Формируем ссылку на канал с треками
-    channel_link = "https://t.me/text_pesni_aqw"
-    if bot_state.download_message_id:
-        channel_link += str(bot_state.download_message_id)
-    
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🎵 Я.Музыка", url=track["yandex_link"]),
-            InlineKeyboardButton("🌐 Другие сервисы", url=track["multi_link"])
-        ],
-        [
-            InlineKeyboardButton("📝 Текст песни", url=track["genius_link"]),
-            InlineKeyboardButton("⬇️ Скачать трек", url= "https://t.me/text_pesni_aqw")
-        ]
-    ])
 
 def generate_multi_service_link(track_id: str) -> str:
     return f"https://song.link/ya/{track_id}"
 
+
 def get_genius_song_url(title: str, artist: str) -> str:
     if not bot_state.genius:
         return f"https://genius.com/search?q={quote(f'{artist} {title}')}"
-    
     try:
         clean_title = unidecode(title.split("(")[0].split("-")[0].strip())
         clean_artist = unidecode(artist.split(",")[0].split("&")[0].strip())
@@ -123,6 +111,7 @@ def get_genius_song_url(title: str, artist: str) -> str:
     except Exception as e:
         logger.error(f"Ошибка Genius: {e}")
         return f"https://genius.com/search?q={quote(f'{artist} {title}')}"
+
 
 def get_current_track():
     try:
@@ -133,7 +122,6 @@ def get_current_track():
             timeout=10,
             verify=False,
         )
-        
         if response.status_code != 200:
             logger.warning(f"API статус {response.status_code}")
             return None
@@ -153,7 +141,6 @@ def get_current_track():
             else track.get("artist", "")
         )
         title = track.get("title", "")
-        
         return {
             "id": track_id,
             "title": title,
@@ -169,6 +156,21 @@ def get_current_track():
         logger.error(f"Ошибка получения трека: {e}")
         return None
 
+
+def get_channel_keyboard(track: dict):
+    """Клавиатура для основного канала с кнопкой отправки в ЛС"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🎵 Я.Музыка", url=track["yandex_link"]),
+            InlineKeyboardButton("🌐 Другие сервисы", url=track["multi_link"])
+        ],
+        [
+            InlineKeyboardButton("📝 Текст песни", url=track["genius_link"]),
+            InlineKeyboardButton("⬇️ В ЛС", callback_data=f"send_ls:{track['download_url']}")
+        ]
+    ])
+
+
 async def send_new_track_message(bot: Bot, track: dict) -> int:
     try:
         caption = f"{track['time']} - {track['title']} — {track['artists']}"
@@ -182,6 +184,7 @@ async def send_new_track_message(bot: Bot, track: dict) -> int:
     except Exception as e:
         logger.error(f"Ошибка отправки трека: {e}")
         return None
+
 
 async def edit_track_message(bot: Bot, track: dict, msg_id: int) -> bool:
     try:
@@ -200,20 +203,19 @@ async def edit_track_message(bot: Bot, track: dict, msg_id: int) -> bool:
         logger.error(f"Ошибка обновления трека: {e}")
         return False
 
+
 async def send_new_download_message(bot: Bot, track: dict) -> int:
+    """Сохраняет трек в канал скачивания (оставляем для совместимости)"""
     if not track.get("download_url"):
         return None
-
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(track["download_url"]) as resp:
                 if resp.status != 200:
                     return None
-
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
                     tmp_file.write(await resp.read())
                     tmp_path = tmp_file.name
-
         msg = await bot.send_audio(
             chat_id=CONFIG["DOWNLOAD_CHANNEL_ID"],
             audio=open(tmp_path, "rb"),
@@ -227,20 +229,19 @@ async def send_new_download_message(bot: Bot, track: dict) -> int:
         logger.error(f"Ошибка отправки трека: {e}")
         return None
 
+
 async def update_download_message(bot: Bot, track: dict, msg_id: int) -> bool:
+    """Обновление трека в канале скачивания"""
     if not track.get("download_url"):
         return False
-
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(track["download_url"]) as resp:
                 if resp.status != 200:
                     return False
-
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
                     tmp_file.write(await resp.read())
                     tmp_path = tmp_file.name
-
         await bot.edit_message_media(
             chat_id=CONFIG["DOWNLOAD_CHANNEL_ID"],
             message_id=msg_id,
@@ -256,6 +257,7 @@ async def update_download_message(bot: Bot, track: dict, msg_id: int) -> bool:
     except Exception as e:
         logger.error(f"Ошибка обновления трека: {e}")
         return False
+
 
 async def track_checker(bot: Bot):
     while bot_state.bot_active:
@@ -282,6 +284,7 @@ async def track_checker(bot: Bot):
                 bot_state.last_track_id = track["id"]
                 
         await asyncio.sleep(5)
+
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -313,11 +316,44 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = "🟢 Активен" if bot_state.bot_active else "🔴 Остановлен"
         await update_status_message(bot, chat_id, f"{status}\nУправление:")
 
+    # Новая ветка: отправка трека в ЛС
+    elif query.data.startswith("send_ls:"):
+        download_url = query.data.split("send_ls:")[1]
+        if not download_url:
+            await query.answer("❌ Трек недоступен")
+            return
+
+        await query.answer("⏳ Отправляю трек в ЛС...")
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(download_url) as resp:
+                    if resp.status != 200:
+                        await query.answer("❌ Не удалось скачать трек")
+                        return
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
+                        tmp_file.write(await resp.read())
+                        tmp_path = tmp_file.name
+
+            await context.bot.send_audio(
+                chat_id=query.from_user.id,
+                audio=open(tmp_path, "rb"),
+                title="Трек",
+                performer="Исполнитель"
+            )
+            os.unlink(tmp_path)
+            await query.answer("✅ Трек отправлен в ЛС!")
+        except Exception as e:
+            logger.error(f"Ошибка отправки трека в ЛС: {e}")
+            await query.answer("❌ Ошибка отправки трека")
+
+
 async def delete_message(bot: Bot, chat_id: int, msg_id: int):
     try:
         await bot.delete_message(chat_id=chat_id, message_id=msg_id)
     except (BadRequest, TelegramError) as e:
         logger.error(f"Ошибка удаления сообщения: {e}")
+
 
 async def update_status_message(bot: Bot, chat_id: int, text: str):
     try:
@@ -338,6 +374,7 @@ async def update_status_message(bot: Bot, chat_id: int, text: str):
     except (BadRequest, TelegramError) as e:
         logger.error(f"Ошибка обновления статуса: {e}")
 
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if bot_state.bot_status_message_id:
         try:
@@ -354,30 +391,22 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     bot_state.bot_status_message_id = msg.message_id
 
-def main():
-    # Проверяем наличие pytz
-    try:
-        import pytz
-    except ImportError:
-        logger.error("Требуется установить pytz: pip install pytz")
-        return
 
+def main():
     required_vars = ["TELEGRAM_BOT_TOKEN", "YANDEX_TOKEN", "CHANNEL_ID", "DOWNLOAD_CHANNEL_ID"]
     if missing := [var for var in required_vars if not CONFIG.get(var)]:
         logger.error(f"Отсутствуют переменные: {', '.join(missing)}")
         return
 
     app = Application.builder().token(CONFIG["TELEGRAM_BOT_TOKEN"]).build()
-    
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(button_handler))
 
     logger.info("Бот запущен")
     app.run_polling()
 
-from flask import Flask
-import threading
 
+# Flask сервер для keep-alive (если нужно)
 app_flask = Flask(__name__)
 
 @app_flask.route('/')
@@ -389,4 +418,4 @@ def run_flask():
 
 if __name__ == '__main__':
     threading.Thread(target=run_flask).start()
-    main()  # запуск бота
+    main()
