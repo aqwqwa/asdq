@@ -25,8 +25,6 @@ from telegram.ext import (
 )
 from telegram.error import BadRequest, TelegramError
 from unidecode import unidecode
-from flask import Flask
-import threading
 
 # Настройка логирования
 logging.basicConfig(
@@ -59,6 +57,12 @@ class BotState:
         self.bot_status_message_id = None
         self.genius = self._init_genius()
 
+        # Настройки постов в главном канале
+        self.channel_post_settings = {
+            "poster": True,   # показывать картинку
+            "buttons": True   # показывать inline кнопки
+        }
+
     def _init_genius(self):
         if CONFIG["GENIUS_TOKEN"]:
             try:
@@ -80,11 +84,15 @@ bot_state = BotState()
 
 
 def get_moscow_time():
+    """Возвращает текущее время по Москве в формате HH:MM"""
     return datetime.now(MOSCOW_TZ).strftime("%H:%M")
 
 
 def get_bot_keyboard():
-    """Клавиатура для управления ботом"""
+    """Клавиатура управления ботом + настройки постов"""
+    poster_status = "Вкл" if bot_state.channel_post_settings.get("poster", True) else "Выкл"
+    buttons_status = "Вкл" if bot_state.channel_post_settings.get("buttons", True) else "Выкл"
+
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("▶️ Запустить трекер", callback_data="start_tracker"),
@@ -92,6 +100,27 @@ def get_bot_keyboard():
         ],
         [
             InlineKeyboardButton("🔄 Обновить статус", callback_data="refresh_status")
+        ],
+        [
+            InlineKeyboardButton(f"🖼 Постер: {poster_status}", callback_data="toggle_poster"),
+            InlineKeyboardButton(f"🔘 Кнопки: {buttons_status}", callback_data="toggle_buttons")
+        ]
+    ])
+
+
+def get_channel_keyboard(track: dict):
+    """Клавиатура для основного канала"""
+    if not bot_state.channel_post_settings.get("buttons", True):
+        return None  # кнопки отключены
+
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🎵 Я.Музыка", url=track["yandex_link"]),
+            InlineKeyboardButton("🌐 Другие сервисы", url=track["multi_link"])
+        ],
+        [
+            InlineKeyboardButton("📝 Текст песни", url=track["genius_link"]),
+            InlineKeyboardButton("⬇️ Скачать трек", url="https://t.me/text_pesni_aqw")
         ]
     ])
 
@@ -103,6 +132,7 @@ def generate_multi_service_link(track_id: str) -> str:
 def get_genius_song_url(title: str, artist: str) -> str:
     if not bot_state.genius:
         return f"https://genius.com/search?q={quote(f'{artist} {title}')}"
+    
     try:
         clean_title = unidecode(title.split("(")[0].split("-")[0].strip())
         clean_artist = unidecode(artist.split(",")[0].split("&")[0].strip())
@@ -122,6 +152,7 @@ def get_current_track():
             timeout=10,
             verify=False,
         )
+        
         if response.status_code != 200:
             logger.warning(f"API статус {response.status_code}")
             return None
@@ -141,6 +172,7 @@ def get_current_track():
             else track.get("artist", "")
         )
         title = track.get("title", "")
+        
         return {
             "id": track_id,
             "title": title,
@@ -157,29 +189,22 @@ def get_current_track():
         return None
 
 
-def get_channel_keyboard(track: dict):
-    """Клавиатура для основного канала с кнопкой отправки в ЛС"""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🎵 Я.Музыка", url=track["yandex_link"]),
-            InlineKeyboardButton("🌐 Другие сервисы", url=track["multi_link"])
-        ],
-        [
-            InlineKeyboardButton("📝 Текст песни", url=track["genius_link"]),
-            InlineKeyboardButton("⬇️ В ЛС", callback_data=f"send_ls:{track['download_url']}")
-        ]
-    ])
-
-
 async def send_new_track_message(bot: Bot, track: dict) -> int:
+    caption = f"{track['time']} - {track['title']} — {track['artists']}"
     try:
-        caption = f"{track['time']} - {track['title']} — {track['artists']}"
-        msg = await bot.send_photo(
-            chat_id=CONFIG["CHANNEL_ID"],
-            photo=track["img"],
-            caption=caption,
-            reply_markup=get_channel_keyboard(track)
-        )
+        if bot_state.channel_post_settings.get("poster", True) and track.get("img"):
+            msg = await bot.send_photo(
+                chat_id=CONFIG["CHANNEL_ID"],
+                photo=track["img"],
+                caption=caption,
+                reply_markup=get_channel_keyboard(track)
+            )
+        else:
+            msg = await bot.send_message(
+                chat_id=CONFIG["CHANNEL_ID"],
+                text=caption,
+                reply_markup=get_channel_keyboard(track)
+            )
         return msg.message_id
     except Exception as e:
         logger.error(f"Ошибка отправки трека: {e}")
@@ -187,17 +212,25 @@ async def send_new_track_message(bot: Bot, track: dict) -> int:
 
 
 async def edit_track_message(bot: Bot, track: dict, msg_id: int) -> bool:
+    caption = f"{track['time']} - {track['title']} — {track['artists']}"
     try:
-        caption = f"{track['time']} - {track['title']} — {track['artists']}"
-        await bot.edit_message_media(
-            chat_id=CONFIG["CHANNEL_ID"],
-            message_id=msg_id,
-            media=InputMediaPhoto(
-                media=track["img"],
-                caption=caption,
-            ),
-            reply_markup=get_channel_keyboard(track)
-        )
+        if bot_state.channel_post_settings.get("poster", True) and track.get("img"):
+            await bot.edit_message_media(
+                chat_id=CONFIG["CHANNEL_ID"],
+                message_id=msg_id,
+                media=InputMediaPhoto(
+                    media=track["img"],
+                    caption=caption
+                ),
+                reply_markup=get_channel_keyboard(track)
+            )
+        else:
+            await bot.edit_message_text(
+                chat_id=CONFIG["CHANNEL_ID"],
+                message_id=msg_id,
+                text=caption,
+                reply_markup=get_channel_keyboard(track)
+            )
         return True
     except Exception as e:
         logger.error(f"Ошибка обновления трека: {e}")
@@ -205,17 +238,19 @@ async def edit_track_message(bot: Bot, track: dict, msg_id: int) -> bool:
 
 
 async def send_new_download_message(bot: Bot, track: dict) -> int:
-    """Сохраняет трек в канал скачивания (оставляем для совместимости)"""
     if not track.get("download_url"):
         return None
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(track["download_url"]) as resp:
                 if resp.status != 200:
                     return None
+
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
                     tmp_file.write(await resp.read())
                     tmp_path = tmp_file.name
+
         msg = await bot.send_audio(
             chat_id=CONFIG["DOWNLOAD_CHANNEL_ID"],
             audio=open(tmp_path, "rb"),
@@ -231,17 +266,19 @@ async def send_new_download_message(bot: Bot, track: dict) -> int:
 
 
 async def update_download_message(bot: Bot, track: dict, msg_id: int) -> bool:
-    """Обновление трека в канале скачивания"""
     if not track.get("download_url"):
         return False
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(track["download_url"]) as resp:
                 if resp.status != 200:
                     return False
+
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
                     tmp_file.write(await resp.read())
                     tmp_path = tmp_file.name
+
         await bot.edit_message_media(
             chat_id=CONFIG["DOWNLOAD_CHANNEL_ID"],
             message_id=msg_id,
@@ -316,36 +353,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = "🟢 Активен" if bot_state.bot_active else "🔴 Остановлен"
         await update_status_message(bot, chat_id, f"{status}\nУправление:")
 
-    # Новая ветка: отправка трека в ЛС
-    elif query.data.startswith("send_ls:"):
-        download_url = query.data.split("send_ls:")[1]
-        if not download_url:
-            await query.answer("❌ Трек недоступен")
-            return
+    elif query.data == "toggle_poster":
+        bot_state.channel_post_settings["poster"] = not bot_state.channel_post_settings.get("poster", True)
+        status = "Вкл" if bot_state.channel_post_settings["poster"] else "Выкл"
+        await query.answer(f"Постер теперь: {status}")
+        await update_status_message(bot, chat_id, "Обновлён статус настроек!")
 
-        await query.answer("⏳ Отправляю трек в ЛС...")
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(download_url) as resp:
-                    if resp.status != 200:
-                        await query.answer("❌ Не удалось скачать трек")
-                        return
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
-                        tmp_file.write(await resp.read())
-                        tmp_path = tmp_file.name
-
-            await context.bot.send_audio(
-                chat_id=query.from_user.id,
-                audio=open(tmp_path, "rb"),
-                title="Трек",
-                performer="Исполнитель"
-            )
-            os.unlink(tmp_path)
-            await query.answer("✅ Трек отправлен в ЛС!")
-        except Exception as e:
-            logger.error(f"Ошибка отправки трека в ЛС: {e}")
-            await query.answer("❌ Ошибка отправки трека")
+    elif query.data == "toggle_buttons":
+        bot_state.channel_post_settings["buttons"] = not bot_state.channel_post_settings.get("buttons", True)
+        status = "Вкл" if bot_state.channel_post_settings["buttons"] else "Выкл"
+        await query.answer(f"Кнопки теперь: {status}")
+        await update_status_message(bot, chat_id, "Обновлён статус настроек!")
 
 
 async def delete_message(bot: Bot, chat_id: int, msg_id: int):
@@ -399,6 +417,7 @@ def main():
         return
 
     app = Application.builder().token(CONFIG["TELEGRAM_BOT_TOKEN"]).build()
+    
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(button_handler))
 
@@ -406,7 +425,9 @@ def main():
     app.run_polling()
 
 
-# Flask сервер для keep-alive (если нужно)
+from flask import Flask
+import threading
+
 app_flask = Flask(__name__)
 
 @app_flask.route('/')
@@ -415,6 +436,7 @@ def index():
 
 def run_flask():
     app_flask.run(host='0.0.0.0', port=10000)
+
 
 if __name__ == '__main__':
     threading.Thread(target=run_flask).start()
