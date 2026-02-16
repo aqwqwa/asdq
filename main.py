@@ -23,12 +23,13 @@ from telegram.ext import (
     ContextTypes,
     CallbackQueryHandler,
 )
+from telegram.error import BadRequest
 
 # ===========================
 # ЛОГИ
 # ===========================
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
@@ -156,24 +157,52 @@ async def delete_previous_messages(bot: Bot):
         bot_state.download_message_id = None
 
 # ===========================
-# ОТПРАВКА/РЕДАКТИРОВАНИЕ
+# ОТПРАВКА / РЕДАКТИРОВАНИЕ
 # ===========================
 async def send_or_edit_track_message(bot: Bot, track: dict):
     caption = generate_caption(track)
+    msg_id = bot_state.channel_message_id
+    use_poster = bot_state.channel_post_settings["poster"]
 
-    if bot_state.channel_post_settings["poster"]:
-        if bot_state.channel_message_id:
-            try:
+    if msg_id:
+        try:
+            if use_poster:
                 await bot.edit_message_media(
                     chat_id=CONFIG["CHANNEL_ID"],
-                    message_id=bot_state.channel_message_id,
-                    media=InputMediaPhoto(track["img"], caption=caption, parse_mode="HTML"),
+                    message_id=msg_id,
+                    media=InputMediaPhoto(
+                        media=track["img"],
+                        caption=caption,
+                        parse_mode="HTML"
+                    ),
                     reply_markup=get_channel_keyboard()
                 )
+            else:
+                await bot.edit_message_text(
+                    chat_id=CONFIG["CHANNEL_ID"],
+                    message_id=msg_id,
+                    text=caption,
+                    parse_mode="HTML",
+                    reply_markup=get_channel_keyboard()
+                )
+            return
+
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
                 return
+
+            try:
+                await bot.delete_message(CONFIG["CHANNEL_ID"], msg_id)
             except:
                 pass
 
+            bot_state.channel_message_id = None
+
+        except Exception:
+            pass
+
+    # Отправляем новое сообщение
+    if use_poster:
         msg = await bot.send_photo(
             CONFIG["CHANNEL_ID"],
             photo=track["img"],
@@ -181,29 +210,15 @@ async def send_or_edit_track_message(bot: Bot, track: dict):
             parse_mode="HTML",
             reply_markup=get_channel_keyboard()
         )
-        bot_state.channel_message_id = msg.message_id
-
     else:
-        if bot_state.channel_message_id:
-            try:
-                await bot.edit_message_text(
-                    CONFIG["CHANNEL_ID"],
-                    bot_state.channel_message_id,
-                    caption,
-                    parse_mode="HTML",
-                    reply_markup=get_channel_keyboard()
-                )
-                return
-            except:
-                pass
-
         msg = await bot.send_message(
             CONFIG["CHANNEL_ID"],
             caption,
             parse_mode="HTML",
             reply_markup=get_channel_keyboard()
         )
-        bot_state.channel_message_id = msg.message_id
+
+    bot_state.channel_message_id = msg.message_id
 
 # ===========================
 # ОТПРАВКА MP3
@@ -290,7 +305,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🎵 Музыкальный трекер", reply_markup=get_bot_keyboard())
 
 # ===========================
-# ЗАПУСК TELEGRAM
+# TELEGRAM
 # ===========================
 def run_bot():
     app = Application.builder().token(CONFIG["TELEGRAM_BOT_TOKEN"]).build()
