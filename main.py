@@ -184,6 +184,7 @@ async def send_or_edit_track_message(bot: Bot, track: dict):
                     text=caption,
                     parse_mode="HTML",
                     reply_markup=get_channel_keyboard()
+                    disable_web_page_preview=True
                 )
             return
 
@@ -216,6 +217,7 @@ async def send_or_edit_track_message(bot: Bot, track: dict):
             caption,
             parse_mode="HTML",
             reply_markup=get_channel_keyboard()
+            disable_web_page_preview=True
         )
 
     bot_state.channel_message_id = msg.message_id
