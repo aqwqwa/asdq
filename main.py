@@ -81,7 +81,7 @@ def get_channel_keyboard():
     if not bot_state.channel_post_settings["buttons"]:
         return None
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬇️ Скачать трек", url="https://t.me/text_pesni_aqw")]
+        [InlineKeyboardButton("⬇️ Скачать трек", url="t.me/aqwaaaeee")]
     ])
 
 def get_bot_keyboard():
